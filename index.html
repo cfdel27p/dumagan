@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task List App</title>
+    <style>
+        body {
+            display: flex;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        #taskList {
+            width: 40%;
+            padding: 20px;
+            border-right: 1px solid #ccc;
+            background-color: #f9f9f9;
+            overflow-y: auto;
+            height: 100vh;
+        }
+
+        #taskInput {
+            width: 60%;
+            padding: 20px;
+        }
+
+        #clock {
+            position: absolute;
+            top: 10px;
+            right: 20px;
+            font-size: 1.5em;
+        }
+
+        .task {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+        }
+
+        .task input[type="checkbox"] {
+            margin-right: 10px;
+        }
+
+        .finished-task .task-text {
+            color: gray;
+            text-decoration: line-through;
+        }
+
+        .task-info,
+        .finished-info,
+        .time-taken {
+            background-color: #e0e0e0;
+            border-radius: 12px;
+            padding: 5px 10px;
+            margin-left: 10px;
+            font-size: 0.8em;
+        }
+
+        input[type="text"] {
+            width: 90%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+
+        button {
+            padding: 10px;
+            margin-top: 10px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="taskList">
+        <h2>Task List</h2>
+        <div id="tasks"></div>
+        <h2>Finished Task List</h2>
+        <div id="finishedTasks"></div>
+    </div>
+
+    <div id="taskInput">
+        <h2>Add a Task</h2>
+        <input type="text" id="newTask" placeholder="Enter a new task...">
+        <button onclick="addTask()">Add Task</button>
+    </div>
+
+    <div id="clock"></div>
+
+    <script>
+        const dbName = 'taskDB';
+        const dbVersion = 1;
+        let db;
+
+        // Open or create the database
+        const request = indexedDB.open(dbName, dbVersion);
+
+        request.onsuccess = (event) => {
+            db = event.target.result;
+            loadTasks();
+        };
+
+        request.onupgradeneeded = (event) => {
+            db = event.target.result;
+            const objectStore = db.createObjectStore('tasks', { keyPath: 'id', autoIncrement: true });
+            objectStore.createIndex('status', 'status', { unique: false });
+        };
+
+        function loadTasks() {
+            const transaction = db.transaction(['tasks'], 'readonly');
+            const objectStore = transaction.objectStore('tasks');
+            const request = objectStore.getAll();
+
+            request.onsuccess = (event) => {
+                event.target.result.forEach(task => {
+                    if (task.status === 'pending') {
+                        displayTask(task);
+                    } else if (task.status === 'finished') {
+                        displayFinishedTask(task);
+                    }
+                });
+            };
+        }
+
+        function addTask() {
+            const taskInput = document.getElementById('newTask');
+            const taskValue = taskInput.value;
+            if (taskValue.trim() === '') return;
+
+            const creationTime = new Date();
+            const task = {
+                text: taskValue,
+                status: 'pending',
+                creationTime: creationTime.getTime(),
+                finishTime: null,
+                taskDurationActual: null
+            };
+
+            const transaction = db.transaction(['tasks'], 'readwrite');
+            const objectStore = transaction.objectStore('tasks');
+            const request = objectStore.add(task);
+
+            request.onsuccess = (event) => {
+                task.id = event.target.result;
+                displayTask(task);
+                taskInput.value = '';
+            };
+        }
+
+        function displayTask(task) {
+            const taskList = document.getElementById('tasks');
+            const taskItem = document.createElement('div');
+            taskItem.className = 'task';
+            taskItem.setAttribute('data-id', task.id);
+            taskItem.innerHTML = `
+                <input type="checkbox" onclick="moveToFinished(this)">
+                <span class="task-text">${task.text}</span>
+                <span class="task-info">💛 ${new Date(task.creationTime).toLocaleTimeString()}</span>
+            `;
+            taskList.appendChild(taskItem);
+        }
+
+        function displayFinishedTask(task) {
+            const finishedTasks = document.getElementById('finishedTasks');
+            const taskItem = document.createElement('div');
+            taskItem.className = 'task finished-task';
+            taskItem.setAttribute('data-id', task.id);
+            taskItem.innerHTML = `
+                <span class="task-text">${task.text}</span>
+                <span class="finished-info">💙 ${new Date(task.finishTime).toLocaleTimeString()}</span>
+                <span class="time-taken">✅ (${calculateTimeTaken(task.creationTime, task.finishTime)})</span>
+            `;
+            finishedTasks.appendChild(taskItem);
+        }
+
+        function moveToFinished(checkbox) {
+            const taskItem = checkbox.parentElement;
+            const taskId = taskItem.getAttribute('data-id');
+            const finishTime = new Date();
+
+            const transaction = db.transaction(['tasks'], 'readwrite');
+            const objectStore = transaction.objectStore('tasks');
+            const request = objectStore.get(Number(taskId));
+
+            request.onsuccess = (event) => {
+                const task = event.target.result;
+                task.status = 'finished';
+                task.finishTime = finishTime.getTime();
+
+                const updateRequest = objectStore.put(task);
+                updateRequest.onsuccess = () => {
+                    updateTaskDisplay(taskItem, task, finishTime);
+                };
+            };
+        }
+
+        function updateTaskDisplay(taskItem, task, finishTime) {
+            taskItem.querySelector('.task-text').classList.add('finished-task');
+            taskItem.querySelector('input[type="checkbox"]').remove(); // Remove checkbox to avoid re-checking
+            displayFinishedTask(task);
+            taskItem.remove(); // Remove original task from the pending list
+        }
+
+        function calculateTimeTaken(startTime, finishTime) {
+            const totalTime = finishTime - startTime; // Total time in milliseconds
+            const seconds = Math.floor((totalTime / 1000) % 60);
+            const minutes = Math.floor((totalTime / (1000 * 60)) % 60);
+            const hours = Math.floor((totalTime / (1000 * 60 * 60)) % 24);
+
+            const timeParts = [];
+            if (hours > 0) timeParts.push(`${hours} hrs`);
+            if (minutes > 0) timeParts.push(`${minutes} min`);
+            if (seconds > 0) timeParts.push(`${seconds} sec`);
+
+            return timeParts.join(' ') || '0 sec'; // Fallback if no time parts are available
+        }
+
+        function updateClock() {
+            const now = new Date();
+            const options = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
+            document.getElementById('clock').innerText = now.toLocaleTimeString(undefined, options);
+        }
+
+        setInterval(updateClock, 1000);
+        updateClock(); // Initial call to display clock immediately
+    </script>
+
+</body>
+
+</html>
